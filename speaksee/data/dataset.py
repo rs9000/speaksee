@@ -22,7 +22,7 @@ class Dataset(object):
                 batch = list(zip(*batch))
 
             tensors = []
-            for field, data in zip(self.fields.values(), batch):
+            for (_, field), data in sorted(zip(self.fields.items(), batch)):
                 tensor = field.process(data)
                 if isinstance(tensor, collections.Sequence) and any(isinstance(t, torch.Tensor) for t in tensor):
                     tensors.extend(tensor)
@@ -430,3 +430,70 @@ class TabularDataset(PairedDataset):
                     test_samples.append(example)
 
         return train_samples, val_samples, test_samples
+    
+    
+class COCO_VQA(PairedDataset):
+    def __init__(self, image_field, question_field, answer_field, vocab, img_root, ann_root):
+
+        roots = dict()
+        roots['train'] = {
+            'img': os.path.join(img_root, 'train2014'),
+            'ann': os.path.join(ann_root, 'mscoco_train2014_annotations.json'),
+            'qst': os.path.join(ann_root, 'OpenEnded_mscoco_train2014_questions.json')
+        }
+        roots['val'] = {
+            'img': os.path.join(img_root, 'val2014'),
+            'ann': os.path.join(ann_root, 'mscoco_val2014_annotations.json'),
+            'qst': os.path.join(ann_root, 'OpenEnded_mscoco_val2014_questions.json')
+        }
+
+        with nostdout():
+            self.train_examples, self.val_examples = self.get_samples(roots, vocab)
+        examples = self.train_examples + self.val_examples
+        super(COCO_VQA, self).__init__(examples, {'image': image_field, 'text': question_field, 'answer': answer_field})
+
+    @property
+    def splits(self):
+        train_split = PairedDataset(self.train_examples, self.fields)
+        val_split = PairedDataset(self.val_examples, self.fields)
+        return train_split, val_split
+
+    @classmethod
+    def get_samples(cls, roots, vocab):
+        train_samples = []
+        val_samples = []
+
+        for split in ['train', 'val']:
+
+            with open(roots[split]['ann']) as json_file:
+                coco_ann = json.load(json_file)
+
+            with open(roots[split]['qst']) as json_file:
+                coco_qst = json.load(json_file)
+
+            coco_qst_dict = {}
+            for q in coco_qst['questions']:
+                coco_qst_dict[q['question_id']] = q
+
+            root = roots[split]['img']
+            pic_name = "COCO_" + split + "2014_"
+
+            for a in coco_ann['annotations']:
+                question_id, answer = a['question_id'], a['answers'][0]['answer']
+
+                # Get only answerable questions with the vocab provided
+                if answer in vocab.keys():
+                    answer = vocab[answer]
+                else:
+                    continue
+
+                image_id, question = coco_qst_dict[question_id]['image_id'], coco_qst_dict[question_id]['question']
+                example = Example.fromdict({'image': os.path.join(root, pic_name + format(image_id, "012d") +
+                                                                  ".jpg"), 'text': question, 'answer': answer})
+
+                if split == 'train':
+                    train_samples.append(example)
+                elif split == 'val':
+                    val_samples.append(example)
+
+        return train_samples, val_samples

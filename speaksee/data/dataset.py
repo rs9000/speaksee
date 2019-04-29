@@ -479,7 +479,11 @@ class COCO_VQA(PairedDataset):
             pic_name = "COCO_" + split + "2014_"
 
             for a in coco_ann['annotations']:
-                question_id, answer = a['question_id'], a['answers'][0]['answer']
+                question_id = a['question_id']
+                
+                # Select most frequent answer by annotators
+                lst = [elem['answer'] for elem in a['answers']]
+                answer = max(set(lst), key=lst.count)
 
                 # Get only answerable questions with the vocab provided
                 if answer in vocab.keys():

@@ -137,7 +137,10 @@ class SAN(nn.Module):
 
         # Layers
         self.rnn = LstmEncoder(vocab_size, self.rnn_size)
-        self.attention = StackedAttention(self.rnn_size, self.att_size)
+        self.stacked_attns = []
+        for i in range(0, num_attention):
+            sa = StackedAttention(self.rnn_size, self.att_size).to(device)
+            self.stacked_attns.append(sa)
 
         self.classifier = nn.Sequential(nn.Linear(self.att_size, 1024),
                                         nn.ReLU(inplace=True),
@@ -165,9 +168,8 @@ class SAN(nn.Module):
         q = q.gather(1, q_len).view(batch_size, self.rnn_size)
 
         # Attention steps
-        for i in range(self.num_attention):
-            u = self.attention(feats, q)
-            q = u + q
+        for sa in self.stacked_attns:
+        	q = sa(feats, q)
 
         # Classifier
         out = self.classifier(q)

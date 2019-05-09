@@ -20,9 +20,10 @@ class LstmEncoder(nn.Module):
         self.START = 0
         self.END = 2
 
+        self.rnn_size = rnn_dim
         self.embed = nn.Embedding(vocab_size, wordvec_dim)
         self.rnn = nn.LSTM(wordvec_dim, rnn_dim, rnn_num_layers,
-                           dropout=rnn_dropout, batch_first=True)
+                           dropout=rnn_dropout, batch_first=True, bidirectional=True)
 
         self.init_weights()
 
@@ -64,9 +65,26 @@ class LstmEncoder(nn.Module):
         idx = idx.type_as(x.data).long()
         idx.requires_grad = False
 
-        x = self.embed(x.to(device))
-        hs, _ = self.rnn(x)
-        return hs, idx
+        hs, _ = self.rnn(self.embed(x))
+
+        hs = hs.view(N, T, self.rnn_size, 2)
+
+        # Split in forward and backward sequence
+        output_forward, output_backward = torch.chunk(hs, 2, 3)
+        output_forward = output_forward.squeeze(3)  # (batch_size, T, hidden_size)
+        output_backward = output_backward.squeeze(3)  # (batch_size, T, hidden_size)
+
+        # Find last elements of the forward sequence
+        q_len = idx.view(N, 1, 1).expand(N, 1, self.rnn_size).to(device)
+
+        # Trunk the forward sequence at t = question_len
+        output_forward = output_forward.gather(1, q_len).view(N, self.rnn_size)
+        # Get last state of the backward sequence t = 0
+        output_backward = output_backward[:, 0, :]
+        # Re-concat output
+        output = torch.cat((output_forward, output_backward), -1)
+
+        return output
 
 
 class StackedAttention(nn.Module):
@@ -124,7 +142,7 @@ class SAN(nn.Module):
 
     """
 
-    def __init__(self, vocab_size, n_answers, num_attention=3, rnn_size=512, att_size=512):
+    def __init__(self, vocab_size, n_answers, num_attention=2, rnn_size=256, att_size=512):
         super(SAN, self).__init__()
 
         print("----------- Build Neural Network -----------")
@@ -139,7 +157,7 @@ class SAN(nn.Module):
         self.rnn = LstmEncoder(vocab_size, self.rnn_size)
         self.stacked_attns = []
         for i in range(0, num_attention):
-            sa = StackedAttention(self.rnn_size, self.att_size).to(device)
+            sa = StackedAttention(self.att_size, self.att_size).to(device)
             self.stacked_attns.append(sa)
 
         self.classifier = nn.Sequential(nn.Linear(self.att_size, 1024),
@@ -161,15 +179,11 @@ class SAN(nn.Module):
         batch_size = feats.shape[0]
 
         # Question embedding
-        q, q_len = self.rnn(question)
-        q_len = q_len.view(batch_size, 1, 1).expand(batch_size, 1, self.rnn_size).to(device)
-
-        # Trunk each question sequence at t = question_len
-        q = q.gather(1, q_len).view(batch_size, self.rnn_size)
+        q = self.rnn(question)
 
         # Attention steps
         for sa in self.stacked_attns:
-        	q = sa(feats, q)
+            q = sa(feats, q)
 
         # Classifier
         out = self.classifier(q)

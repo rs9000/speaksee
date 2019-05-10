@@ -182,11 +182,15 @@ class SAN(nn.Module):
         q = self.rnn(question)
 
         # Attention steps
+        u1 = q
+
         for sa in self.stacked_attns:
-            q = sa(feats, q)
+            u2 = sa(feats, u1)
+            u2 = u2 + u1
+            u1 = u2
 
         # Classifier
-        out = self.classifier(q)
+        out = self.classifier(u2)
         return out
 
     def get_data(self):
